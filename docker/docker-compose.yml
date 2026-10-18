@@ -17,13 +17,13 @@ services:
       ZEN_GATE_HOME: /data
       ZEN_GATE_PORT: "8787"
       ZEN_GATE_ALLOW_LAN: "1"
-      # 首次启动预置进 config.json 的网关主密钥（请改成你自己的 ofm- 密钥）
-      ZEN_GATE_KEY: "ofm-7-jYSMtm2QMGzUyYxN9AiljBX0p4fvYN"
+      # 首次启动预置进 config.json 的网关主密钥（改成你自己的 ofm- 密钥）
+      ZEN_GATE_KEY: "<你的网关主密钥 ofm-xxxx>"
       # 局域网面板密码（Web 登录页，会话 cookie 7 天）。留空则不开启局域网面板。
-      ZEN_GATE_ADMIN_PASSWORD: "zg-99820f40-4ced7a8d"
+      ZEN_GATE_ADMIN_PASSWORD: "<你的面板密码>"
       # 覆盖面板"局域网 Base URL"（桥接容器自动检测会显示容器 IP，不可达）。
       # 改成你服务器/主机的真实局域网 IP，如 http://192.168.1.10:8787/v1
-      ZEN_GATE_LAN_BASE_URL: "http://192.168.123.8:8787/v1"
+      ZEN_GATE_LAN_BASE_URL: "http://192.168.1.10:8787/v1"
     volumes:
       # 配置/统计/日志持久化到宿主机 ./zen-gate-data
       - ./zen-gate-data:/data
