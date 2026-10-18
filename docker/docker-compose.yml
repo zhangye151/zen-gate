@@ -1,0 +1,38 @@
+# zen-gate 无头网关 —— docker compose（1Panel 可直接导入）
+# 推荐直接用 GitHub Actions 构建并推到 GHCR 的镜像（无需本地/服务器编译）：
+#   image: ghcr.io/zhangye151/zen-gate:latest
+# 若你想本地自己构建，把 image 行改成 build 段（见文末注释）。
+# 运行模式：普通桥接 + 端口映射（1Panel UI 标准模型，更新/重建正常）。
+# 原版 zen-gate 管理面板只接受 127.0.0.1 来源（桥接会 403），本镜像已内置补丁
+# allowLanAdmin=true → 放行局域网来源 + Web 登录页（adminPassword）保护，因此
+# 桥接 + 8787:8787 下面板与 API 都正常。
+services:
+  zen-gate:
+    image: ghcr.io/zhangye151/zen-gate:latest
+    container_name: zen-gate
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      ZEN_GATE_HOME: /data
+      ZEN_GATE_PORT: "8787"
+      ZEN_GATE_ALLOW_LAN: "1"
+      # 首次启动预置进 config.json 的网关主密钥（请改成你自己的 ofm- 密钥）
+      ZEN_GATE_KEY: "ofm-7-jYSMtm2QMGzUyYxN9AiljBX0p4fvYN"
+      # 局域网面板密码（Web 登录页，会话 cookie 7 天）。留空则不开启局域网面板。
+      ZEN_GATE_ADMIN_PASSWORD: "zg-99820f40-4ced7a8d"
+      # 覆盖面板"局域网 Base URL"（桥接容器自动检测会显示容器 IP，不可达）。
+      # 改成你服务器/主机的真实局域网 IP，如 http://192.168.1.10:8787/v1
+      ZEN_GATE_LAN_BASE_URL: "http://192.168.123.8:8787/v1"
+    volumes:
+      # 配置/统计/日志持久化到宿主机 ./zen-gate-data
+      - ./zen-gate-data:/data
+    stdin_open: false
+    tty: false
+
+# 如果你想在 1Panel/服务器上自己构建（需要能访问 docker 的机器）：
+#   build:
+#     context: ..
+#     dockerfile: docker/Dockerfile
+#   image: zen-gate:latest
+#   并删除上面的 image: ghcr.io/... 行。
