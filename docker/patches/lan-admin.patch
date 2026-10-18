@@ -1,0 +1,294 @@
+diff --git a/internal/gateway/admin.go b/internal/gateway/admin.go
+index 3bad423..926280d 100644
+--- a/internal/gateway/admin.go
++++ b/internal/gateway/admin.go
+@@ -3,7 +3,11 @@ package gateway
+ import (
+ 	"context"
+ 	_ "embed"
++	"crypto/hmac"
++	"crypto/sha256"
++	"crypto/subtle"
+ 	"encoding/csv"
++	"encoding/hex"
+ 	"encoding/json"
+ 	"fmt"
+ 	"io"
+@@ -43,7 +47,7 @@ func decodeBody(r *http.Request, v any) error {
+ }
+ 
+ func (s *Server) serveDashboard(w http.ResponseWriter, r *http.Request) {
+-	if !adminAllowed(w, r, false) {
++	if !s.adminAllowed(w, r, false) {
+ 		return
+ 	}
+ 	w.Header().Set("content-type", "text/html; charset=utf-8")
+@@ -51,7 +55,7 @@ func (s *Server) serveDashboard(w http.ResponseWriter, r *http.Request) {
+ }
+ 
+ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, rest string) {
+-	if !adminAllowed(w, r, r.Method != http.MethodGet) {
++	if !s.adminAllowed(w, r, r.Method != http.MethodGet) {
+ 		return
+ 	}
+ 	switch {
+@@ -180,10 +184,23 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, rest string
+ 	}
+ }
+ 
+-// adminAllowed enforces the dashboard fence: loopback Host (DNS-rebinding
+-// guard) + loopback remote; mutating requests additionally require a
+-// same-origin Origin/Referer when the client supplies one.
+-func adminAllowed(w http.ResponseWriter, r *http.Request, mutating bool) bool {
++// adminAllowed enforces the dashboard fence. Upstream behaviour: loopback Host
++// (DNS-rebinding guard) + loopback remote; mutating requests additionally
++// require a same-origin Origin/Referer when the client supplies one.
++//
++// With allowLanAdmin set (container patch), the fence is lifted so the panel
++// can be operated straight from the LAN with no reverse proxy; AdminPassword
++// then guards the admin surface with a web login session (HMAC-signed cookie)
++// instead of a browser Basic-Auth popup.
++func (s *Server) adminAllowed(w http.ResponseWriter, r *http.Request, mutating bool) bool {
++	cfg := s.Store.Config()
++	if cfg.AllowLanAdmin {
++		if cfg.AdminPassword != "" && !s.adminAuthed(r) {
++			s.adminChallenge(w, r)
++			return false
++		}
++		return true
++	}
+ 	host := r.Host
+ 	if i := strings.LastIndex(host, ":"); i >= 0 && !strings.Contains(host, "]") {
+ 		hname := host[:i]
+@@ -215,6 +232,126 @@ func adminAllowed(w http.ResponseWriter, r *http.Request, mutating bool) bool {
+ 	return true
+ }
+ 
++// ---- Web login session (container patch) -----------------------------------
++
++// adminAuthed reports whether the request carries the admin session cookie, an
++// HMAC of the configured password. The cookie is HttpOnly + SameSite=Lax: page
++// JS can never read it, and cross-site POSTs (the only kind that mutates
++// config) do not carry it — so a hostile page cannot drive the panel either.
++func (s *Server) adminAuthed(r *http.Request) bool {
++	tok := s.adminSessionToken()
++	if tok == "" {
++		return false
++	}
++	c, err := r.Cookie(cookieName)
++	if err != nil {
++		return false
++	}
++	return subtle.ConstantTimeCompare([]byte(c.Value), []byte(tok)) == 1
++}
++
++func (s *Server) adminSessionToken() string {
++	pw := s.Store.Config().AdminPassword
++	if pw == "" {
++		return ""
++	}
++	mac := hmac.New(sha256.New, []byte(pw))
++	mac.Write([]byte("zen-gate-admin-session-v1"))
++	return hex.EncodeToString(mac.Sum(nil))
++}
++
++// adminChallenge answers an unauthenticated admin request: the dashboard page
++// (path "/") is redirected to the web login page; API calls get a plain 401.
++func (s *Server) adminChallenge(w http.ResponseWriter, r *http.Request) {
++	if r.URL.Path == "/" || r.URL.Path == "/admin" || (r.Method == http.MethodGet && strings.Contains(r.Header.Get("Accept"), "text/html")) {
++		http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
++		return
++	}
++	writeJSON(w, 401, map[string]any{"error": "admin authentication required"})
++}
++
++// adminLoginPage renders the password form (GET /admin/login).
++func (s *Server) adminLoginPage(w http.ResponseWriter, r *http.Request) {
++	if s.adminAuthed(r) {
++		http.Redirect(w, r, "/", http.StatusSeeOther)
++		return
++	}
++	errHTML := ""
++	if r.URL.Query().Get("e") == "1" {
++		errHTML = `<div class="err">密码错误，请重试</div>`
++	}
++	w.Header().Set("content-type", "text/html; charset=utf-8")
++	_, _ = w.Write([]byte(strings.Replace(adminLoginHTML, "{{ERR}}", errHTML, 1)))
++}
++
++// adminLogin validates the submitted password and sets the session cookie
++// (POST /admin/login).
++func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
++	pw := s.Store.Config().AdminPassword
++	if pw == "" {
++		http.Redirect(w, r, "/", http.StatusSeeOther)
++		return
++	}
++	if err := r.ParseForm(); err != nil {
++		writeJSON(w, 400, map[string]any{"error": "bad form"})
++		return
++	}
++	if r.PostForm.Get("password") != pw {
++		http.Redirect(w, r, "/admin/login?e=1", http.StatusSeeOther)
++		return
++	}
++	http.SetCookie(w, &http.Cookie{
++		Name:     cookieName,
++		Value:    s.adminSessionToken(),
++		Path:     "/",
++		MaxAge:   7 * 24 * 3600, // 7 days
++		HttpOnly: true,
++		SameSite: http.SameSiteLaxMode,
++	})
++	http.Redirect(w, r, "/", http.StatusSeeOther)
++}
++
++// adminLogout clears the session cookie (GET /admin/logout).
++func (s *Server) adminLogout(w http.ResponseWriter, r *http.Request) {
++	http.SetCookie(w, &http.Cookie{Name: cookieName, Path: "/", MaxAge: -1})
++	http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
++}
++
++const cookieName = "zg_admin"
++
++const adminLoginHTML = `<!doctype html>
++<html lang="zh-CN">
++<head>
++<meta charset="utf-8">
++<meta name="viewport" content="width=device-width,initial-scale=1">
++<title>Zen Gate · 登录</title>
++<style>
++  *{box-sizing:border-box}
++  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0f1115;color:#e6e8ee;font-family:-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif}
++  .card{width:min(92vw,340px);background:#181b22;border:1px solid #2a2f3a;border-radius:14px;padding:28px 26px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
++  h1{font-size:18px;margin:0 0 4px;font-weight:600}
++  p.sub{font-size:13px;color:#9aa1ad;margin:0 0 20px}
++  label{display:block;font-size:13px;color:#c3c9d4;margin-bottom:6px}
++  input[type=password]{width:100%;padding:10px 12px;font-size:15px;background:#0f1115;border:1px solid #333a46;border-radius:8px;color:#e6e8ee;outline:none}
++  input[type=password]:focus{border-color:#4a7dff}
++  button{width:100%;margin-top:16px;padding:11px;font-size:15px;font-weight:600;background:#3b6cff;border:0;border-radius:8px;color:#fff;cursor:pointer}
++  button:hover{background:#2f5ce8}
++  .err{margin-top:14px;font-size:13px;color:#ff6b6b}
++</style>
++</head>
++<body>
++  <form class="card" method="post" action="/admin/login">
++    <h1>Zen Gate 管理面板</h1>
++    <p class="sub">请输入访问密码</p>
++    <label for="pw">密码</label>
++    <input id="pw" name="password" type="password" autocomplete="current-password" autofocus required>
++    <button type="submit">登录</button>
++    {{ERR}}
++  </form>
++</body>
++</html>
++`
++
+ func (s *Server) adminState(w http.ResponseWriter) {
+ 	cfg := s.Store.Config()
+ 	cat, av, egress := s.Lane.Snapshot()
+diff --git a/internal/gateway/server.go b/internal/gateway/server.go
+index 2142896..6507be3 100644
+--- a/internal/gateway/server.go
++++ b/internal/gateway/server.go
+@@ -380,11 +380,16 @@ func (s *Server) BaseURL() string {
+ }
+ 
+ // LANBaseURL is the endpoint other machines on the network reach, empty while
+-// the LAN toggle is off or the box has no usable address.
++// the LAN toggle is off or the box has no usable address. A configured
++// LanBaseURL wins over NIC detection: in a bridged container the detection
++// returns the container IP, which LAN peers cannot reach (container patch).
+ func (s *Server) LANBaseURL() string {
+ 	if !s.Store.Config().AllowLan {
+ 		return ""
+ 	}
++	if u := s.Store.Config().LanBaseURL; u != "" {
++		return u
++	}
+ 	addrs, err := net.InterfaceAddrs()
+ 	if err != nil {
+ 		return ""
+@@ -461,6 +466,14 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
+ 	case path == "/favicon.png":
+ 		w.Header().Set("content-type", "image/png")
+ 		_, _ = w.Write(faviconPNG)
++	// Web login session (container patch): handled before the admin fence so an
++	// unauthenticated user can reach the password form.
++	case path == "/admin/login" && r.Method == http.MethodGet:
++		s.adminLoginPage(w, r)
++	case path == "/admin/login" && r.Method == http.MethodPost:
++		s.adminLogin(w, r)
++	case path == "/admin/logout":
++		s.adminLogout(w, r)
+ 	case path == "" || path == "/" || path == "/admin":
+ 		s.serveDashboard(w, r)
+ 	case strings.HasPrefix(path, "/admin/api/"):
+diff --git a/internal/gateway/web/index.html b/internal/gateway/web/index.html
+index a411149..a74915b 100644
+--- a/internal/gateway/web/index.html
++++ b/internal/gateway/web/index.html
+@@ -744,7 +744,7 @@ function renderDash(s){
+   // 快捷按钮
+   document.getElementById("dash-copy-full").onclick = () => {
+     const text = JSON.stringify({baseURL: s.baseURL, apiKey: s.mainKey, models: s.models.map(m=>m.id)}, null, 2);
+-    navigator.clipboard.writeText(text).then(()=>toast("已复制完整接入配置")).catch(()=>toast("复制失败"));
++    copyText(text, "已复制完整接入配置");
+   };
+   document.getElementById("dash-reprobe").onclick = async ()=>{ toast("探测中，稍后刷新…"); await api("/reprobe", {}); };
+   document.getElementById("dash-gologs").onclick = ()=>{ cur="logs"; localStorage.setItem("zengate.page","logs"); nav(); render(); };
+@@ -2407,13 +2407,28 @@ document.addEventListener("click", e=>{
+ });
+ 
+ /* copy buttons */
++// 明文 HTTP（局域网 IP 访问）下 navigator.clipboard 不可用，需 execCommand 兜底，
++// 否则复制按钮点了没反应。
++function copyText(text, label){
++  const done = label || "已复制";
++  const fallback = ()=>{
++    const inp = document.createElement("textarea");
++    inp.value = text;
++    inp.style.position = "fixed"; inp.style.opacity = "0";
++    document.body.appendChild(inp); inp.select();
++    try{ document.execCommand("copy"); }catch(e){}
++    inp.remove(); toast(done);
++  };
++  if (navigator.clipboard && window.isSecureContext) {
++    navigator.clipboard.writeText(text).then(()=>toast(done)).catch(fallback);
++  } else {
++    fallback();
++  }
++}
+ document.addEventListener("click", e=>{
+   const t = e.target.closest("[data-copy]");
+   if(!t) return;
+-  navigator.clipboard.writeText(t.dataset.copy).then(()=>toast("已复制")).catch(()=>{
+-    const inp=document.createElement("textarea"); inp.value=t.dataset.copy; document.body.appendChild(inp);
+-    inp.select(); document.execCommand("copy"); inp.remove(); toast("已复制");
+-  });
++  copyText(t.dataset.copy);
+ });
+ 
+ let lastSig = "";
+diff --git a/internal/store/store.go b/internal/store/store.go
+index 41028eb..bd633c5 100644
+--- a/internal/store/store.go
++++ b/internal/store/store.go
+@@ -95,6 +95,17 @@ type Config struct {
+ 	// AllowLan widens the listener from loopback to every interface: the API
+ 	// keeps requiring an API key, the dashboard stays loopback-only.
+ 	AllowLan             bool              `json:"allowLan,omitempty"`
++	// AllowLanAdmin (container patch) lifts the dashboard's loopback-only fence
++	// so the admin panel is reachable from the LAN without a reverse proxy.
++	// AdminPassword, when set, guards every admin request — the dashboard HTML
++	// included — with HTTP Basic Auth, replacing the proxy-level auth.
++	AllowLanAdmin bool   `json:"allowLanAdmin,omitempty"`
++	AdminPassword string `json:"adminPassword,omitempty"`
++	// LanBaseURL overrides the "局域网 Base URL" the dashboard advertises.
++	// In a bridged container the automatic NIC detection returns the container
++	// IP (e.g. 172.17.0.2), which LAN peers cannot reach; set this to the host's
++	// real LAN address instead (container patch).
++	LanBaseURL string `json:"lanBaseURL,omitempty"`
+ 	MainKey              string            `json:"mainKey"`
+ 	AgentKeys            map[string]string `json:"agentKeys"`
+ 	DefaultMaxTokens     int               `json:"defaultMaxTokens"`

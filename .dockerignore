@@ -1,0 +1,7 @@
+# docker build 构建上下文排除（上下文 = 仓库根目录）
+.git
+.github
+*.md
+README.md
+docker/docker-compose.yml
+docker/README-deploy.md
