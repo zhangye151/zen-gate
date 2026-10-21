@@ -1,5 +1,5 @@
 diff --git a/internal/gateway/admin.go b/internal/gateway/admin.go
-index 3bad423..926280d 100644
+index 427f87d..953164f 100644
 --- a/internal/gateway/admin.go
 +++ b/internal/gateway/admin.go
 @@ -3,7 +3,11 @@ package gateway
@@ -188,7 +188,7 @@ index 3bad423..926280d 100644
  	cfg := s.Store.Config()
  	cat, av, egress := s.Lane.Snapshot()
 diff --git a/internal/gateway/server.go b/internal/gateway/server.go
-index 2142896..6507be3 100644
+index 359eca8..4bef6dc 100644
 --- a/internal/gateway/server.go
 +++ b/internal/gateway/server.go
 @@ -380,11 +380,16 @@ func (s *Server) BaseURL() string {
@@ -225,19 +225,31 @@ index 2142896..6507be3 100644
  		s.serveDashboard(w, r)
  	case strings.HasPrefix(path, "/admin/api/"):
 diff --git a/internal/gateway/web/index.html b/internal/gateway/web/index.html
-index a411149..a74915b 100644
+index 6c2e664..fcbaae7 100644
 --- a/internal/gateway/web/index.html
 +++ b/internal/gateway/web/index.html
-@@ -744,7 +744,7 @@ function renderDash(s){
+@@ -577,11 +577,6 @@
+ <div id="app">
+   <header id="titlebar">
+     <div class="wm">ZEN<span class="tick">—</span>GATE</div>
+-    <div class="wbtns">
+-      <button id="w-min" title="最小化">—</button>
+-      <button id="w-max" title="最大化 / 还原">▢</button>
+-      <button id="w-close" class="close" title="关闭">×</button>
+-    </div>
+   </header>
+   <div class="body">
+     <aside class="side" id="side">
+@@ -942,7 +937,7 @@ function renderDash(s){
    // 快捷按钮
    document.getElementById("dash-copy-full").onclick = () => {
      const text = JSON.stringify({baseURL: s.baseURL, apiKey: s.mainKey, models: s.models.map(m=>m.id)}, null, 2);
 -    navigator.clipboard.writeText(text).then(()=>toast("已复制完整接入配置")).catch(()=>toast("复制失败"));
 +    copyText(text, "已复制完整接入配置");
    };
-   document.getElementById("dash-reprobe").onclick = async ()=>{ toast("探测中，稍后刷新…"); await api("/reprobe", {}); };
-   document.getElementById("dash-gologs").onclick = ()=>{ cur="logs"; localStorage.setItem("zengate.page","logs"); nav(); render(); };
-@@ -2407,13 +2407,28 @@ document.addEventListener("click", e=>{
+   document.getElementById("dash-reprobe").onclick = async ()=>{
+     const b = document.getElementById("dash-reprobe");
+@@ -2632,13 +2627,28 @@ document.addEventListener("click", e=>{
  });
  
  /* copy buttons */
@@ -263,15 +275,26 @@ index a411149..a74915b 100644
    const t = e.target.closest("[data-copy]");
    if(!t) return;
 -  navigator.clipboard.writeText(t.dataset.copy).then(()=>toast("已复制")).catch(()=>{
--    const inp=document.createElement("textarea"); inp.value=t.dataset.copy; document.body.appendChild(inp);
--    inp.select(); document.execCommand("copy"); inp.remove(); toast("已复制");
+-    const inp=document.createElement("textarea"); inp.value=t.dataset.copy; document.body.appendChild(inp); document.body.appendChild(inp); inp.select(); document.execCommand("copy"); inp.remove(); toast("已复制");
 -  });
 +  copyText(t.dataset.copy);
  });
  
  let lastSig = "";
+@@ -2712,11 +2722,6 @@ function setTheme(t){
+   if (seg) seg.querySelectorAll("button").forEach(b=>b.classList.toggle("on", b.dataset.t===t));
+ }
+ 
+-/* ---- window controls ---- */
+-const wbtn = id => document.getElementById(id);
+-wbtn("w-min").onclick = e => { e.stopPropagation(); window.zengateMinimize && zengateMinimize(); };
+-wbtn("w-max").onclick = e => { e.stopPropagation(); window.zengateToggleMax && zengateToggleMax(); };
+-wbtn("w-close").onclick = e => { e.stopPropagation(); window.zengateClose && zengateClose(); };
+ const tb = document.getElementById("titlebar");
+ let dragArmed = false, dragX = 0, dragY = 0;
+ tb.addEventListener("mousedown", e => {
 diff --git a/internal/store/store.go b/internal/store/store.go
-index 41028eb..bd633c5 100644
+index 065371c..6aa6632 100644
 --- a/internal/store/store.go
 +++ b/internal/store/store.go
 @@ -95,6 +95,17 @@ type Config struct {
