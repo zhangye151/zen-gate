@@ -275,7 +275,7 @@ index 6c2e664..fcbaae7 100644
    const t = e.target.closest("[data-copy]");
    if(!t) return;
 -  navigator.clipboard.writeText(t.dataset.copy).then(()=>toast("已复制")).catch(()=>{
--    const inp=document.createElement("textarea"); inp.value=t.dataset.copy; document.body.appendChild(inp); document.body.appendChild(inp); inp.select(); document.execCommand("copy"); inp.remove(); toast("已复制");
+-    const inp=document.createElement("textarea"); inp.value=t.dataset.copy; document.body.appendChild(inp); inp.select(); document.execCommand("copy"); inp.remove(); toast("已复制");
 -  });
 +  copyText(t.dataset.copy);
  });
