@@ -41,7 +41,8 @@ RUN git init /src \
 
 # 容器补丁：allowLanAdmin / adminPassword（局域网直接访问面板 + Web 登录），
 # 让面板无需反代容器即可从局域网打开；另删网页用不到的最小化/最大化/关闭按钮。
-COPY patches/lan-admin.patch /src/patches/lan-admin.patch
+# 注意：GitHub Actions 的 build context 是仓库根目录，这里路径要带 docker/ 前缀。
+COPY docker/patches/lan-admin.patch /src/patches/lan-admin.patch
 RUN cd /src && git apply /src/patches/lan-admin.patch
 
 WORKDIR /src
@@ -65,7 +66,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && mkdir -p /data && chown -R 1000:1000 /data
 
 COPY --from=builder /out/zen-gate /usr/local/bin/zen-gate
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 ENV ZEN_GATE_HOME=/data \
