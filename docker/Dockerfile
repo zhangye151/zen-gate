@@ -7,12 +7,12 @@
 # 为什么是这个构建方式：
 #  - 上游是 Go 桌面托盘程序，Linux 编译会引入 getlantern/systray（GTK3 +
 #    appindicator，cgo），所以构建期需要对应 C 头文件，运行期需要 .so 库。
-#   即便 --no-tray 不调用 GTK，二进制仍 DT_NEEDED 这两份库，运行镜像须带上。
+#  - 即便 --no-tray 不调用 GTK，二进制仍 DT_NEEDED 这两份库，运行镜像须带上。
 #  - 源码在构建器内按固定 commit 拉取，镜像可在任意有 Docker 的机器/1Panel
 #    上直接构建，无需把源码传到服务器。
 #  - 版本号通过 ldflags 注入（与上游 make 脚本一致，不剥符号，方便 crash 栈）。
 #
-# 构建：docker build -t zen-gate:1.8.2 .
+# 构建：docker build -t zen-gate:1.8.4 .
 # ---------------------------------------------------------------------------
 
 # ---------- 构建阶段 ----------
@@ -22,9 +22,9 @@ FROM golang:1.26-bookworm AS builder
 ENV GOPROXY=https://goproxy.cn,direct
 
 ARG ZEN_GATE_REPO=https://github.com/LAGcomcom/zen-gate.git
-# 固定到本次分析过的 HEAD 提交，保证可复现（v1.8.2）
-ARG ZEN_GATE_COMMIT=f7b390431d59124e4136247ee346fa485c47f948
-ARG ZEN_GATE_VERSION=1.8.2
+# 固定到本次分析过的 HEAD 提交，保证可复现（v1.8.4）
+ARG ZEN_GATE_COMMIT=c2b4843a3e23a5e417ffc955f204f13657945a15
+ARG ZEN_GATE_VERSION=1.8.4
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       gcc libc6-dev pkg-config git ca-certificates \
