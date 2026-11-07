@@ -32,10 +32,17 @@ jobs:
       - name: derive version
         id: ver
         run: |
-          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo latest)
+          # 优先用当前 HEAD 上的 git tag；fork 仓库没有同步上游 tag 时，
+          # 退回到 docker/Dockerfile 里钉的 ZEN_GATE_VERSION（避免版本号变成 latest）。
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          if [ -z "$TAG" ]; then
+            TAG=$(grep -E '^ARG ZEN_GATE_VERSION=' docker/Dockerfile | head -1 | cut -d= -f2 | tr -d '[:space:]')
+          fi
+          [ -z "$TAG" ] && TAG=latest
           SHA=$(git rev-parse --short HEAD)
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "version = $TAG ($SHA)"
 
       - name: login ghcr
         uses: docker/login-action@v3
