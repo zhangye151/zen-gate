@@ -12,7 +12,7 @@
 #    上直接构建，无需把源码传到服务器。
 #  - 版本号通过 ldflags 注入（与上游 make 脚本一致，不剥符号，方便 crash 栈）。
 #
-# 构建：docker build -t zen-gate:1.8.4 .
+# 构建：docker build -t zen-gate:1.10.0 .
 # ---------------------------------------------------------------------------
 
 # ---------- 构建阶段 ----------
@@ -22,9 +22,9 @@ FROM golang:1.26-bookworm AS builder
 ENV GOPROXY=https://goproxy.cn,direct
 
 ARG ZEN_GATE_REPO=https://github.com/LAGcomcom/zen-gate.git
-# 固定到本次分析过的 HEAD 提交，保证可复现（v1.8.4）
-ARG ZEN_GATE_COMMIT=c2b4843a3e23a5e417ffc955f204f13657945a15
-ARG ZEN_GATE_VERSION=1.8.4
+# 固定到本次分析过的 HEAD 提交，保证可复现（v1.10.0）
+ARG ZEN_GATE_COMMIT=52e1e62ff7b6817f02bb8a30541c5009c91c0515
+ARG ZEN_GATE_VERSION=1.10.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       gcc libc6-dev pkg-config git ca-certificates \
@@ -39,11 +39,18 @@ RUN git init /src \
     && for i in 1 2 3; do git fetch --depth 1 origin "$ZEN_GATE_COMMIT" && break || { echo "fetch attempt $i failed, retrying"; sleep 5; }; done \
     && git checkout FETCH_HEAD
 
-# 容器补丁：allowLanAdmin / adminPassword（局域网直接访问面板 + Web 登录），
-# 让面板无需反代容器即可从局域网打开；另删网页用不到的最小化/最大化/关闭按钮。
-# 注意：GitHub Actions 的 build context 是仓库根目录，这里路径要带 docker/ 前缀。
+# 容器补丁：allowLanAdmin / adminPassword / lanBaseURL（局域网直接访问面板 + Web 登录），
+# 让面板无需反代容器即可从局域网打开；另删网页用不到的最小化/最大化/关闭按钮，
+# 以及给复制按钮加 execCommand 兜底（明文 HTTP 下 navigator.clipboard 不可用）。
+#
+# 注意两点，缺一不可：
+#  1) GitHub Actions 的 build context 是仓库根目录，这里路径要带 docker/ 前缀。
+#  2) 上游 .go 源文件是 CRLF 行尾，而补丁以 LF 保存；不先统一行尾，git apply 会
+#     因每行都差一个 \r 而整文件冲突。
 COPY docker/patches/lan-admin.patch /src/patches/lan-admin.patch
-RUN cd /src && git apply /src/patches/lan-admin.patch
+RUN cd /src \
+    && find . -type f \( -name "*.go" -o -name "*.html" \) -print0 | xargs -0 -r sed -i 's/\r$//' \
+    && git apply /src/patches/lan-admin.patch
 
 WORKDIR /src
 # CGO_ENABLED=1：systray(linux) 需要 cgo 链接 GTK/appindicator。
