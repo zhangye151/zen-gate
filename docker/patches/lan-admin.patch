@@ -1,14 +1,15 @@
 diff --git a/internal/gateway/admin.go b/internal/gateway/admin.go
-index 427f87d..953164f 100644
+index 08484e6..c270ecf 100644
 --- a/internal/gateway/admin.go
 +++ b/internal/gateway/admin.go
-@@ -3,7 +3,11 @@ package gateway
+@@ -2,8 +2,12 @@ package gateway
+ 
  import (
  	"context"
- 	_ "embed"
 +	"crypto/hmac"
 +	"crypto/sha256"
 +	"crypto/subtle"
+ 	_ "embed"
  	"encoding/csv"
 +	"encoding/hex"
  	"encoding/json"
@@ -32,7 +33,7 @@ index 427f87d..953164f 100644
  		return
  	}
  	switch {
-@@ -180,10 +184,23 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, rest string
+@@ -220,10 +224,23 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, rest string
  	}
  }
  
@@ -60,7 +61,7 @@ index 427f87d..953164f 100644
  	host := r.Host
  	if i := strings.LastIndex(host, ":"); i >= 0 && !strings.Contains(host, "]") {
  		hname := host[:i]
-@@ -215,6 +232,126 @@ func adminAllowed(w http.ResponseWriter, r *http.Request, mutating bool) bool {
+@@ -255,6 +272,126 @@ func adminAllowed(w http.ResponseWriter, r *http.Request, mutating bool) bool {
  	return true
  }
  
@@ -188,18 +189,10 @@ index 427f87d..953164f 100644
  	cfg := s.Store.Config()
  	cat, av, egress := s.Lane.Snapshot()
 diff --git a/internal/gateway/server.go b/internal/gateway/server.go
-index 359eca8..4bef6dc 100644
+index 3365bc9..3675cec 100644
 --- a/internal/gateway/server.go
 +++ b/internal/gateway/server.go
-@@ -380,11 +380,16 @@ func (s *Server) BaseURL() string {
- }
- 
- // LANBaseURL is the endpoint other machines on the network reach, empty while
--// the LAN toggle is off or the box has no usable address.
-+// the LAN toggle is off or the box has no usable address. A configured
-+// LanBaseURL wins over NIC detection: in a bridged container the detection
-+// returns the container IP, which LAN peers cannot reach (container patch).
- func (s *Server) LANBaseURL() string {
+@@ -415,6 +415,9 @@ func (s *Server) LANBaseURL() string {
  	if !s.Store.Config().AllowLan {
  		return ""
  	}
@@ -209,7 +202,7 @@ index 359eca8..4bef6dc 100644
  	addrs, err := net.InterfaceAddrs()
  	if err != nil {
  		return ""
-@@ -461,6 +466,14 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
+@@ -494,6 +497,14 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
  	case path == "/favicon.png":
  		w.Header().Set("content-type", "image/png")
  		_, _ = w.Write(faviconPNG)
@@ -225,13 +218,13 @@ index 359eca8..4bef6dc 100644
  		s.serveDashboard(w, r)
  	case strings.HasPrefix(path, "/admin/api/"):
 diff --git a/internal/gateway/web/index.html b/internal/gateway/web/index.html
-index 6c2e664..fcbaae7 100644
+index a5d9bdd..518d865 100644
 --- a/internal/gateway/web/index.html
 +++ b/internal/gateway/web/index.html
-@@ -577,11 +577,6 @@
+@@ -934,11 +934,6 @@
  <div id="app">
    <header id="titlebar">
-     <div class="wm">ZEN<span class="tick">—</span>GATE</div>
+     <div class="wm"><span class="mark" aria-hidden="true"></span>ZEN<span class="tick">—</span>GATE</div>
 -    <div class="wbtns">
 -      <button id="w-min" title="最小化">—</button>
 -      <button id="w-max" title="最大化 / 还原">▢</button>
@@ -240,33 +233,50 @@ index 6c2e664..fcbaae7 100644
    </header>
    <div class="body">
      <aside class="side" id="side">
-@@ -942,7 +937,7 @@ function renderDash(s){
+@@ -1334,10 +1329,10 @@ function renderDash(s){
+       b.onclick = ()=>{
+         if(t.copy){
+           const text = JSON.stringify({baseURL: s.baseURL, apiKey: s.mainKey, models: s.models.map(m=>m.id)}, null, 2);
+-          navigator.clipboard.writeText(text).then(()=>{
++          copyText(text, ()=>{
+             localStorage.setItem("zengate.onboard-copy","1");
+             toast("已复制完整接入配置，这一步完成"); refresh();
+-          }).catch(()=>toast("复制失败"));
++          });
+           return;
+         }
+         if(t.act) t.act();
+@@ -1347,10 +1342,10 @@ function renderDash(s){
    // 快捷按钮
-   document.getElementById("dash-copy-full").onclick = () => {
+   const copyFull = () => {
      const text = JSON.stringify({baseURL: s.baseURL, apiKey: s.mainKey, models: s.models.map(m=>m.id)}, null, 2);
--    navigator.clipboard.writeText(text).then(()=>toast("已复制完整接入配置")).catch(()=>toast("复制失败"));
-+    copyText(text, "已复制完整接入配置");
+-    navigator.clipboard.writeText(text).then(()=>{
++    copyText(text, ()=>{
+       localStorage.setItem("zengate.onboard-copy","1");
+       toast("已复制完整接入配置");
+-    }).catch(()=>toast("复制失败"));
++    });
    };
-   document.getElementById("dash-reprobe").onclick = async ()=>{
-     const b = document.getElementById("dash-reprobe");
-@@ -2632,13 +2627,28 @@ document.addEventListener("click", e=>{
+   const cfBtn = document.getElementById("dash-copy-full");
+   if(cfBtn) cfBtn.onclick = copyFull;
+@@ -4634,13 +4629,28 @@ document.addEventListener("click", e=>{
  });
  
  /* copy buttons */
 +// 明文 HTTP（局域网 IP 访问）下 navigator.clipboard 不可用，需 execCommand 兜底，
 +// 否则复制按钮点了没反应。
-+function copyText(text, label){
-+  const done = label || "已复制";
++function copyText(text, onDone){
++  const done = ()=>{ try{ onDone && onDone(); }catch(e){} };
 +  const fallback = ()=>{
 +    const inp = document.createElement("textarea");
 +    inp.value = text;
 +    inp.style.position = "fixed"; inp.style.opacity = "0";
 +    document.body.appendChild(inp); inp.select();
 +    try{ document.execCommand("copy"); }catch(e){}
-+    inp.remove(); toast(done);
++    inp.remove(); done();
 +  };
 +  if (navigator.clipboard && window.isSecureContext) {
-+    navigator.clipboard.writeText(text).then(()=>toast(done)).catch(fallback);
++    navigator.clipboard.writeText(text).then(done).catch(fallback);
 +  } else {
 +    fallback();
 +  }
@@ -278,11 +288,11 @@ index 6c2e664..fcbaae7 100644
 -    const inp=document.createElement("textarea"); inp.value=t.dataset.copy; document.body.appendChild(inp);
 -    inp.select(); document.execCommand("copy"); inp.remove(); toast("已复制");
 -  });
-+  copyText(t.dataset.copy);
++  copyText(t.dataset.copy, ()=>toast("已复制"));
  });
  
  let lastSig = "";
-@@ -2712,11 +2722,6 @@ function setTheme(t){
+@@ -4791,11 +4801,6 @@ function setTheme(t){
    if (seg) seg.querySelectorAll("button").forEach(b=>b.classList.toggle("on", b.dataset.t===t));
  }
  
@@ -295,17 +305,17 @@ index 6c2e664..fcbaae7 100644
  let dragArmed = false, dragX = 0, dragY = 0;
  tb.addEventListener("mousedown", e => {
 diff --git a/internal/store/store.go b/internal/store/store.go
-index 065371c..6aa6632 100644
+index 5c35fd4..9b19364 100644
 --- a/internal/store/store.go
 +++ b/internal/store/store.go
-@@ -95,6 +95,17 @@ type Config struct {
+@@ -133,6 +133,17 @@ type Config struct {
  	// AllowLan widens the listener from loopback to every interface: the API
  	// keeps requiring an API key, the dashboard stays loopback-only.
  	AllowLan             bool              `json:"allowLan,omitempty"`
 +	// AllowLanAdmin (container patch) lifts the dashboard's loopback-only fence
 +	// so the admin panel is reachable from the LAN without a reverse proxy.
 +	// AdminPassword, when set, guards every admin request — the dashboard HTML
-+	// included — with HTTP Basic Auth, replacing the proxy-level auth.
++	// included — with a web login session instead of a proxy-level auth.
 +	AllowLanAdmin bool   `json:"allowLanAdmin,omitempty"`
 +	AdminPassword string `json:"adminPassword,omitempty"`
 +	// LanBaseURL overrides the "局域网 Base URL" the dashboard advertises.
