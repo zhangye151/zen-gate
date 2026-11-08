@@ -1,9 +1,9 @@
 name: build-zen-gate-image
 
 # 触发时机：
-#  - 推送到 master（改源码或打包文件都重建）
+#  - 推送到 master（改 Dockerfile / 补丁 / entrypoint 都重建）
 #  - 手动运行（Actions → 本工作流 → Run workflow）
-#  - 每周一 03:00 自动重建一次，保证镜像始终跟得上上游（配合 fork 的 Sync fork）
+#  - 每周一 03:00 自动重建一次（跟随 docker/Dockerfile 里钉的上游 commit）
 on:
   push:
     branches: [master]
@@ -32,7 +32,7 @@ jobs:
       - name: derive version
         id: ver
         run: |
-          # 优先用当前 HEAD 上的 git tag；fork 仓库没有同步上游 tag 时，
+          # 优先用当前 HEAD 上的 git tag；仓库未同步上游 tag 时，
           # 退回到 docker/Dockerfile 里钉的 ZEN_GATE_VERSION（避免版本号变成 latest）。
           TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
           if [ -z "$TAG" ]; then
