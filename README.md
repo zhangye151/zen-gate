@@ -8,9 +8,9 @@
 
 ---
 
-## 这个 fork 比上游多了什么
+## 这个仓库比上游多了什么
 
-原版 zen-gate 是桌面托盘程序，管理面板只接受 `127.0.0.1` 来源，局域网访问必须靠反代容器伪装来源，且镜像不自带容器化。本 fork 只做 **容器化增强**，不改动上游的网关逻辑：
+原版 zen-gate 是桌面托盘程序，管理面板只接受 `127.0.0.1` 来源，局域网访问必须靠反代容器伪装来源，且镜像不自带容器化。本仓库只做 **容器化增强**，不改动上游的网关逻辑：
 
 | 增强 | 说明 |
 | --- | --- |
@@ -36,8 +36,6 @@
 | `ghcr.io/zhangye151/zen-gate:latest` | 最新（推荐） |
 | `ghcr.io/zhangye151/zen-gate:1.10.0` | 对应上游 release 版本（从 `docker/Dockerfile` 的 `ZEN_GATE_VERSION` 取） |
 | `ghcr.io/zhangye151/zen-gate:<commit sha>` | 精确到某次提交 |
-
-> fork 仓库未同步上游 git tag 时，工作流自动回退到读 `docker/Dockerfile` 里的 `ZEN_GATE_VERSION`，不会退化成 `latest` 当版本号。
 
 ### Docker 一键跑
 
@@ -80,49 +78,72 @@ docker run -d --name zen-gate --restart unless-stopped -p 8787:8787 \
 
 ---
 
-## 上游更新后如何同步（重点）
+## 上游更新后如何跟进（重点）
 
-这是真实 fork（`zhangye151/zen-gate ← LAGcomcom/zen-gate`），所以同步走 GitHub 官方机制，**不会覆盖你的任何东西**：
+**本仓库不是上游源码的镜像，只保留容器打包文件。** 上游源码在构建时由 `docker/Dockerfile` 直接 `git fetch` 指定 commit 拉取 —— 这就是仓库里没有 `internal/`、`cmd/`、`assets/` 的原因，刻意为之（267 个文件 / 3.2 MB 精简到 10 个文件 / 90 KB）。
 
-1. **合入上游更新**：在你的 fork 首页点 **Sync fork**（GitHub 会把上游新提交合入你 fork 的 `master`）。因为 docker 打包文件在 `docker/` 和 `.github/`，上游根本没有这些文件，合并永远不会动它们；你的补丁在 `docker/patches/lan-admin.patch`，也不受影响。
-2. **自动重建新镜像**：合并推送到 `master` 后，`build-zen-gate-image` 工作流自动触发，用"新上游源码 + 补丁"构建并推 `latest`。也可以：
-   - 手动：Actions → `build-zen-gate-image` → **Run workflow**
-   - 每周自动重建：工作流带 `schedule`，每周一 03:00 跑一次
-3. **拉新镜像**：1Panel / 服务器把容器镜像改成 `ghcr.io/zhangye151/zen-gate:latest` 重新创建即可。
+**不要用 Sync fork。** 仓库里已无上游源码，Sync 只会产生成片的 `modify/delete` 冲突，还得逐个手工 resolve。
 
-### 万一上游改了补丁涉及的文件（会怎样）
+跟进新版本只有一个动作 —— 改 `docker/Dockerfile` 顶部两行：
 
-如果上游更新恰好改了 `admin.go` / `server.go` / `web/index.html` / `store.go` 之一，导致补丁打不上，**构建会在 `git apply` 这一步直接失败**，日志里是标准报错：
+```dockerfile
+ARG ZEN_GATE_COMMIT=<上游新 commit>
+ARG ZEN_GATE_VERSION=<新版本号（不带 v）>
+```
+
+推送到 `master` 后，`.github/workflows/docker-build.yml` 自动构建并推送新镜像。
+
+### 具体步骤
+
+```bash
+# 1. 查上游最新 tag 及对应 commit
+git ls-remote --tags https://github.com/LAGcomcom/zen-gate | tail -5
+
+# 2. 改 docker/Dockerfile 的两个 ARG
+#    注意 ZEN_GATE_COMMIT 必须写完整 40 位 commit，不能写 tag 名
+
+# 3. 推送 → CI 自动构建
+git commit -am "chore: bump to upstream vX.Y.Z" && git push
+```
+
+也可以在 GitHub 网页上直接编辑 `docker/Dockerfile` 这两行，提交后同样触发构建。
+
+### 构建产物与触发方式
+
+| 触发 | 产物 |
+| --- | --- |
+| push 到 `master` | `:latest` + `:<版本号>` + `:<commit sha>` |
+| 手动 | Actions → `build-zen-gate-image` → Run workflow |
+| 每周一 03:00 | 定时重建（跟随上游最新状态） |
+
+### 如果补丁打不上
+
+上游改了 `internal/gateway/admin.go` / `server.go` / `web/index.html` / `internal/store/store.go` 之一时，构建会在 `git apply` 这一步失败，日志是标准报错：
 
 ```
 error: patch failed: internal/gateway/admin.go:224
 error: internal/gateway/admin.go: patch does not apply
 ```
 
-这时只需要重做补丁（锚点改了，改锚点重跑即可）：
+这时重做补丁（锚点变了，改锚点重跑重放脚本即可）：
 
 ```bash
-# 1. 拿一份干净的上游源码，检出目标版本
 git clone https://github.com/LAGcomcom/zen-gate /tmp/zg && cd /tmp/zg
-git checkout v1.10.0            # 换成新版本
+git checkout vX.Y.Z
 
-# 2. 对着 docker/patches/lan-admin.patch 的内容逐处重新应用（或直接修锚点后重跑重放脚本）
-#    注意顺序：改文本必须按脚本精确替换，不要手改，容易改动 1 个字符就 apply 不了
+# 用本地维护的重放脚本重放 13 处文本替换（每处命中次数必须恰好为 1）
+python3 regenerate_patch.py
 
-# 3. 导出补丁（必须保持 LF，且不要丢掉尾随空格以外的内容）
-git diff > docker/patches/lan-admin.patch
-
-# 4. 把新版本号写回 Dockerfile 的 ZEN_GATE_COMMIT / ZEN_GATE_VERSION，提交推送 → 自动重建
-git add -A && git commit -m "chore: refresh patch for upstream vX.Y.Z" && git push
+# 脚本会导出新的 docker/patches/lan-admin.patch 并自检，再提交推送
 ```
 
-> 更省事的做法：本地维护一个重放脚本（按“old → new”文本对逐处替换，每处校验命中次数必须恰好为 1），换版本时只改锚点，一键导出补丁并自检 `git apply --check`。这个仓库只存最终补丁，脚本不进来。
+> 重放脚本按 "old → new" 文本对逐处替换，每处 `replace_once` 校验命中次数，失败即整体退出、不产出补丁 —— 保证补丁永远是干净可 apply 的。
 
 ---
 
 ## 本地 / 服务器自己构建（可选）
 
-不需要 GitHub 也可以本地构建（例如没有外网权限的内网服务器）：
+不需要 GitHub 也可以本地构建（例如没有外网权限的内网服务器）。Dockerfile 会在构建器内 `git fetch` 上游源码，不依赖仓库里的源码：
 
 ```bash
 git clone https://github.com/zhangye151/zen-gate && cd zen-gate
@@ -137,17 +158,22 @@ docker run -d --name zen-gate -p 8787:8787 \
 
 ---
 
-## 结构说明
+## 仓库结构
 
 ```
-docker/
-├── Dockerfile                # 多阶段构建（上下文 = 仓库根目录）
-├── entrypoint.sh             # 首次预置 config.json + 启动
-├── patches/lan-admin.patch   # 全部增强补丁（唯一需要维护的文件）
-├── docker-compose.yml        # 1Panel 可直接导入
-└── README-deploy.md          # 详细部署/访问/防火墙说明
-.github/workflows/
-└── docker-build.yml          # 自动构建 → GHCR
+.
+├── docker/
+│   ├── Dockerfile                # 多阶段构建；顶部两个 ARG 决定拉哪个上游版本
+│   ├── entrypoint.sh             # 首次预置 config.json + 启动
+│   ├── patches/lan-admin.patch   # 全部增强补丁（唯一需要维护的文件）
+│   ├── docker-compose.yml        # 1Panel 可直接导入
+│   └── README-deploy.md          # 详细部署/访问/防火墙说明
+├── .github/workflows/
+│   └── docker-build.yml          # 自动构建 → GHCR
+├── .dockerignore
+├── .gitignore
+├── LICENSE
+└── README.md
 ```
 
-> 上游源码保持原样（干净），增强全在补丁文件里 —— 这是"永远不被上游覆盖"的关键设计。
+> 上游源码**有意不放进仓库**：只在构建时 `git fetch` 拉取，仓库保持极简（约 90 KB）。代价是放弃 Sync fork，换来"改两个 ARG 就能跟进任何上游版本"，且不会再被上游的内部重构（`internal/` 目录经常整块重排）干扰。
